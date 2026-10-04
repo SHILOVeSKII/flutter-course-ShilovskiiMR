@@ -163,7 +163,7 @@ Widget task6() {
         width: 140,
         height: 140,
         fit: BoxFit.cover,
-      ),
+      ), // Для коммита
     ),
   );
 }
