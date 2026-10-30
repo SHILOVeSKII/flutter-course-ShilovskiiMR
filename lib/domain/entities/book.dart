@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class Book {
   final String id;
   final String title;
@@ -16,6 +18,9 @@ class Book {
     required this.year,
     required this.coverColor,
   });
+
+  factory Book.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) =>
+      Book.fromJson({...doc.data()!, 'id': doc.id});
 
   factory Book.fromJson(Map<String, dynamic> json) => Book(
     id: json['id'] as String,

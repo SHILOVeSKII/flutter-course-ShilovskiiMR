@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:flutter_application_1/data/book_api.dart';
 import 'package:flutter_application_1/domain/entities/book.dart';
 import 'package:flutter_application_1/ui/screens/catalog_screen.dart';
@@ -17,11 +14,16 @@ Map<String, dynamic> bookJson(String id, String title) => {
   'year': 2000,
   'coverColor': '#9E3B2B',
 };
-http.Response jsonResponse(Object data, [int status = 200]) => http.Response(
-  jsonEncode(data),
-  status,
-  headers: {'content-type': 'application/json; charset=utf-8'},
-);
+
+class FakeBookApi extends BookApi {
+  final updates = StreamController<List<Book>>.broadcast();
+  final Future<void> Function(Book)? save;
+  FakeBookApi({this.save});
+  @override
+  Stream<List<Book>> watchBooks() => updates.stream;
+  @override
+  Future<void> createBook(Book book) async => save?.call(book);
+}
 
 void main() {
   test('Book serializes all data except server-generated id', () {
@@ -33,25 +35,19 @@ void main() {
   testWidgets('Loading, retry, likes, and filter work with server data', (
     tester,
   ) async {
-    final pending = Completer<http.Response>();
-    var calls = 0;
-    final api = BookApi(
-      client: MockClient((_) async {
-        calls++;
-        if (calls == 1) return pending.future;
-        return jsonResponse([
-          bookJson('42', 'Книга'),
-          bookJson('43', 'Другая книга')..['coverColor'] = 'invalid',
-        ]);
-      }),
-    );
-    addTearDown(api.close);
+    final api = FakeBookApi();
+    addTearDown(api.updates.close);
     await tester.pumpWidget(MaterialApp(home: CatalogScreen(api: api)));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    pending.complete(http.Response('error', 500));
+    api.updates.addError(Exception('permission-denied'));
     await tester.pumpAndSettle();
-    expect(find.text('Обновить'), findsOneWidget);
-    await tester.tap(find.text('Обновить'));
+    expect(find.textContaining('permission-denied'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pump();
+    api.updates.add([
+      Book.fromJson(bookJson('42', 'Книга')),
+      Book.fromJson(bookJson('43', 'Другая книга')..['coverColor'] = 'invalid'),
+    ]);
     await tester.pumpAndSettle();
     expect(find.text('Книга'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -64,26 +60,22 @@ void main() {
     expect(find.text('В избранном: 1'), findsOneWidget);
   });
 
-  testWidgets('Empty titles are blocked and POST uses server id', (
+  testWidgets('Empty titles are blocked and add waits for stream update', (
     tester,
   ) async {
-    final pending = Completer<http.Response>();
+    final pending = Completer<void>();
     var posts = 0;
-    final api = BookApi(
-      client: MockClient((request) async {
-        if (request.method == 'GET') {
-          return jsonResponse([bookJson('1', 'Старая книга')]);
-        }
+    final api = FakeBookApi(
+      save: (book) async {
         posts++;
-        final body = jsonDecode(request.body) as Map<String, dynamic>;
-        expect(body.containsKey('id'), isFalse);
-        expect(body['title'], 'Новая книга');
-        expect(request.headers['content-type'], contains('application/json'));
-        return pending.future;
-      }),
+        expect(book.toJson().containsKey('id'), isFalse);
+        expect(book.title, 'Новая книга');
+        await pending.future;
+      },
     );
-    addTearDown(api.close);
+    addTearDown(api.updates.close);
     await tester.pumpWidget(MaterialApp(home: CatalogScreen(api: api)));
+    api.updates.add([Book.fromJson(bookJson('1', 'Старая книга'))]);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Отправить'));
     await tester.pump();
@@ -97,9 +89,15 @@ void main() {
       tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
       isNull,
     );
-    pending.complete(jsonResponse(bookJson('99', 'Новая книга'), 201));
+    pending.complete();
     await tester.pumpAndSettle();
     expect(posts, 1);
+    expect(find.text('Новая книга'), findsNothing);
+    api.updates.add([
+      Book.fromJson(bookJson('99', 'Новая книга')),
+      Book.fromJson(bookJson('1', 'Старая книга')),
+    ]);
+    await tester.pumpAndSettle();
     expect(find.text('Новая книга'), findsOneWidget);
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
@@ -111,16 +109,13 @@ void main() {
     );
   });
 
-  testWidgets('Failed POST keeps title and allows retry', (tester) async {
-    final api = BookApi(
-      client: MockClient(
-        (request) async => request.method == 'GET'
-            ? jsonResponse([])
-            : http.Response('error', 500),
-      ),
+  testWidgets('Failed add keeps title and allows retry', (tester) async {
+    final api = FakeBookApi(
+      save: (_) async => throw Exception('permission-denied'),
     );
-    addTearDown(api.close);
+    addTearDown(api.updates.close);
     await tester.pumpWidget(MaterialApp(home: CatalogScreen(api: api)));
+    api.updates.add([]);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Сохранить название');
     await tester.tap(find.text('Отправить'));
