@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../data/book_api.dart';
 import '../../domain/entities/book.dart';
@@ -17,48 +18,38 @@ class _CatalogScreenState extends State<CatalogScreen> {
   late final BookApi _api;
   final _titleController = TextEditingController();
   final Set<String> _likedIds = <String>{};
-  List<Book> _books = [];
+  late Stream<List<Book>> _booksStream;
   bool _onlyLiked = false;
-  bool _loading = true;
   bool _sending = false;
-  String? _loadError;
   String? _titleError;
 
   @override
   void initState() {
     super.initState();
     _api = widget.api ?? BookApi();
-    _loadBooks();
+    _booksStream = _api.watchBooks();
   }
 
   @override
   void dispose() {
     _titleController.dispose();
-    if (widget.api == null) _api.close();
     super.dispose();
   }
 
-  Future<void> _loadBooks() async {
-    setState(() {
-      _loading = true;
-      _loadError = null;
-    });
+  void _loadBooks() => setState(() => _booksStream = _api.watchBooks());
+
+  Future<void> _signOut() async {
     try {
-      final books = await _api.fetchBooks();
+      await FirebaseAuth.instance.signOut();
+    } on FirebaseAuthException catch (e) {
       if (!mounted) return;
-      setState(() => _books = books);
-    } catch (_) {
-      if (!mounted) return;
-      setState(
-        () => _loadError = 'Не удалось загрузить книги. Проверьте подключение и повторите попытку.',
-      );
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.code)));
     }
   }
 
   Future<void> _sendBook() async {
-    if (_sending || _loading || _loadError != null) return;
+    if (_sending) return;
     final title = _titleController.text.trim();
     if (title.isEmpty) {
       setState(() => _titleError = 'Введите название книги');
@@ -69,7 +60,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
       _titleError = null;
     });
     try {
-      final book = await _api.createBook(
+      await _api.createBook(
         Book(
           id: '',
           title: title,
@@ -81,7 +72,6 @@ class _CatalogScreenState extends State<CatalogScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _books.insert(0, book);
         _onlyLiked = false;
         _titleController.clear();
       });
@@ -105,26 +95,16 @@ class _CatalogScreenState extends State<CatalogScreen> {
     });
   }
 
-  Widget _buildCatalog() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_loadError != null) {
+  Widget _buildCatalog(AsyncSnapshot<List<Book>> snapshot) {
+    if (snapshot.hasError) {
       return Center(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_loadError!, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: _loadBooks,
-                child: const Text('Обновить'),
-              ),
-            ],
-          ),
-        ),
+        child: Text(snapshot.error.toString(), textAlign: TextAlign.center),
       );
     }
-    final visibleBooks = _books
+    if (!snapshot.hasData) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final visibleBooks = snapshot.data!
         .where((book) => !_onlyLiked || _likedIds.contains(book.id))
         .toList();
     if (visibleBooks.isEmpty) {
@@ -158,8 +138,12 @@ class _CatalogScreenState extends State<CatalogScreen> {
         actions: [
           IconButton(
             tooltip: 'Обновить каталог',
-            onPressed: _loading || _sending ? null : _loadBooks,
+            onPressed: _sending ? null : _loadBooks,
             icon: const Icon(Icons.refresh),
+          ),
+          TextButton(
+            onPressed: _sending ? null : _signOut,
+            child: const Text('Выйти'),
           ),
         ],
         title: Column(
@@ -198,9 +182,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton(
-                  onPressed: _sending || _loading || _loadError != null
-                      ? null
-                      : _sendBook,
+                  onPressed: _sending ? null : _sendBook,
                   child: Text(_sending ? 'Отправка…' : 'Отправить'),
                 ),
               ),
@@ -214,7 +196,12 @@ class _CatalogScreenState extends State<CatalogScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Expanded(child: _buildCatalog()),
+              Expanded(
+                child: StreamBuilder<List<Book>>(
+                  stream: _booksStream,
+                  builder: (context, snapshot) => _buildCatalog(snapshot),
+                ),
+              ),
             ],
           ),
         ),
