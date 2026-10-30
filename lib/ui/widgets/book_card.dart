@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../domain/entities/book.dart';
 
 class BookCard extends StatelessWidget {
@@ -15,6 +16,21 @@ class BookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hex = book.coverColor.replaceFirst(RegExp(r'^#'), '');
+    final colorValue = RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(hex)
+        ? int.parse(hex, radix: 16)
+        : 0x467A55;
+    final coverColor = Color(0xFF000000 | colorValue);
+    final categoryIcon = switch (book.category) {
+      'Роман' => Icons.menu_book,
+      'Фантастика' => Icons.auto_awesome,
+      'Антиутопия' => Icons.visibility,
+      'Сказка' => Icons.public,
+      'Фэнтези' => Icons.auto_fix_high,
+      'Пример' => Icons.text_fields,
+      _ => Icons.menu_book,
+    };
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -31,7 +47,7 @@ class BookCard extends StatelessWidget {
                     height: 108,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: book.coverColor,
+                      color: coverColor,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -78,7 +94,7 @@ class BookCard extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(book.categoryIcon, size: 18, color: book.coverColor),
+                      Icon(categoryIcon, size: 18, color: coverColor),
                       const SizedBox(width: 5),
                       Expanded(
                         child: Text(
@@ -102,14 +118,17 @@ class BookCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
-                      color: book.coverColor.withValues(alpha: 0.14),
+                      color: coverColor.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
                       book.category,
-                      style: TextStyle(color: book.coverColor, fontSize: 12),
+                      style: TextStyle(color: coverColor, fontSize: 12),
                     ),
                   ),
                 ],
