@@ -1,45 +1,92 @@
-import 'dart:convert';
+import 'dart:async';
 
-import 'package:http/http.dart' as http;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../domain/entities/book.dart';
 
+/// Repository: all Firebase access stays here, outside widgets and Cubit.
 class BookApi {
-  static final _booksUri = Uri.parse(
-    'https://6adf80838e42963c8d5e0e95.mockapi.io/books',
-  );
-  final http.Client _client;
+  CollectionReference<Map<String, dynamic>> get _books =>
+      FirebaseFirestore.instance.collection('books');
 
-  BookApi({http.Client? client}) : _client = client ?? http.Client();
+  CollectionReference<Map<String, dynamic>> _favorites(String uid) =>
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('favorites');
 
-  Future<List<Book>> fetchBooks() async {
-    final response = await _client
-        .get(_booksUri)
-        .timeout(const Duration(seconds: 20));
-    if (response.statusCode != 200) {
-      throw Exception('Ошибка загрузки: статус ${response.statusCode}');
-    }
-    final data = jsonDecode(utf8.decode(response.bodyBytes)) as List;
-    return data
-        .map((item) => Book.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
+  Stream<User?> get authChanges => FirebaseAuth.instance.authStateChanges();
 
-  Future<Book> createBook(Book book) async {
-    final response = await _client
-        .post(
-          _booksUri,
-          headers: {'Content-Type': 'application/json; charset=UTF-8'},
-          body: jsonEncode(book.toJson()),
-        )
-        .timeout(const Duration(seconds: 20));
-    if (response.statusCode != 201) {
-      throw Exception('Ошибка добавления: статус ${response.statusCode}');
-    }
-    return Book.fromJson(
-      jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>,
+  Future<void> signIn(String email, String password) async {
+    await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email,
+      password: password,
     );
   }
 
-  void close() => _client.close();
+  Future<void> register(String email, String password) async {
+    await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+  }
+
+  Future<void> signOut() => FirebaseAuth.instance.signOut();
+
+  Stream<List<Book>> watchBooks() async* {
+    // Refresh must report a network error instead of silently using an empty cache.
+    final initial = await _books
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 15));
+    yield initial.docs.map(Book.fromFirestore).toList();
+    yield* _books.snapshots().map(
+      (snapshot) => snapshot.docs.map(Book.fromFirestore).toList(),
+    );
+  }
+
+  Stream<Set<String>> watchFavorites(String uid) =>
+      _favorites(uid)
+          .snapshots()
+          .map((snapshot) => snapshot.docs.map((doc) => doc.id).toSet());
+
+  Future<void> setLiked(String uid, String bookId, bool liked) async {
+    final doc = _favorites(uid).doc(bookId);
+    if (liked) {
+      await doc.set({'liked': true}).timeout(const Duration(seconds: 15));
+    } else {
+      await doc.delete().timeout(const Duration(seconds: 15));
+    }
+  }
+
+  Future<void> createBook(Book book) async {
+    await _books.add(book.toJson()).timeout(const Duration(seconds: 15));
+  }
+
+  static String errorText(Object error) {
+    if (error is TimeoutException) {
+      return 'Сервер не ответил. Проверьте интернет и обновите каталог перед повторной отправкой.';
+    }
+    if (error is FirebaseException) {
+      final message = switch (error.code) {
+        'invalid-email' => 'Введите корректный email.',
+        'invalid-credential' ||
+        'wrong-password' ||
+        'user-not-found' => 'Неверный email или пароль.',
+        'email-already-in-use' =>
+          'Этот email уже зарегистрирован. Нажмите «Войти».',
+        'weak-password' =>
+          'Пароль слишком короткий. Используйте не менее 6 символов.',
+        'too-many-requests' => 'Слишком много попыток. Попробуйте позже.',
+        'network-request-failed' || 'unavailable' || 'deadline-exceeded' =>
+          'Нет связи с сервером. Проверьте интернет и повторите попытку.',
+        'permission-denied' ||
+        'unauthenticated' => 'Нет доступа к данным. Выйдите и войдите снова.',
+        'user-disabled' => 'Аккаунт отключён.',
+        _ => 'Не удалось выполнить действие. Повторите попытку.',
+      };
+      return '$message (${error.code})';
+    }
+    return 'Не удалось выполнить действие. Проверьте подключение и повторите попытку.';
+  }
 }

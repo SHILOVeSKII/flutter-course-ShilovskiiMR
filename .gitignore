@@ -46,3 +46,9 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Firebase CLI cache, logs and private service account keys
+.firebase/
+firebase-debug.log
+*-firebase-adminsdk-*.json
+**/.kotlin/
